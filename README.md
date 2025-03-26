@@ -1,13 +1,11 @@
 # Cypher Jammer DELUXE
+2NRF's, Oled screen, 3 buttons, and LED (optional)
 
-### Open-source Wireless Jamming Pentesting Device using ESP32-WROOM-32D & 3 NRFL01+PA+LNA Modules
+### Open-source Wireless Jamming Pentesting Device using ESP32-WROOM-32D & 2 NRFL01+PA+LNA Modules
 
-This is an ESP32 wireless pentesting device that generates 2.4GHz signals at various channels. This is an upgrade to the previous cypher-jammer, and adds an SSD1306 display and buttons. This allows much more flexiblility when using the device.
+This is an ESP32 wireless pentesting device that generates 2.4GHz signals at various channels. This is an upgrade to the previous cypher-jammer, and adds an SSD1306 display and buttons & optional led. This allows much more flexiblility when using the device.
 
 ** PCB COMING SOON **
-
-### Order my PCBs from other projects from PCBWay & get a $10 coupon ^_^ : https://pcbway.com/g/87Pi52
-
 <img src="img/device2.jpg" alt="Wifi and Bluetooth jammer made with an esp32 and nrf24l01+pa+lna modules." width="400" height="600">
 <img src="img/device3.jpg" alt="Wifi and Bluetooth jammer made with an esp32 and nrf24l01+pa+lna modules." width="400" height="600">
 <img src="img/device4.jpg" alt="Wifi and Bluetooth jammer made with an esp32 and nrf24l01+pa+lna modules." width="400" height="600">
@@ -27,7 +25,7 @@ This is an ESP32 wireless pentesting device that generates 2.4GHz signals at var
 
 ---
 ## REQUIRED DEVICE AND MODULE:
-1. `3pc  NRF24LO1+PA+LNA`
+1. `2pc  NRF24LO1+PA+LNA`
 - https://amzn.to/41cax0I
 
 2. `1pc ESP32`
@@ -38,25 +36,27 @@ This is an ESP32 wireless pentesting device that generates 2.4GHz signals at var
 - https://amzn.to/4aUpl7v
 
 4. `SSD1306 128x64 .96in Display ` 
-- https://amzn.to/3QeGX4M	
+- https://amzn.to/3QeGX4M
+5. `3 Tactile Buttons `
+  
 
 ---
 
  ## PINS TO ATTACH NRF24L01 TO ESP32
 
 ### FOR 3 NRF24s
-+ Radio 1 ` VSPI= SCK = 18, MISO =19, MOSI = 23 ,CS =15 ,CE = 27`
++ Radio 1 ` VSPI= SCK = 14, MISO =13, MOSI = 12 ,CS =21 ,CE = 15`
 + Radio 2 ` VSPI= SCK = 18, MISO =19, MOSI = 23 ,CS =25 ,CE = 26`
-+ Radio 3 ` VSPI= SCK = 18, MISO =19, MOSI = 23 ,CS =5 ,CE = 17`
+
 
 ** edit code here to change radios **
 // radio(CE, CS)
-RF24 radio(27, 15, 16000000);   // Radio 1
+RF24 radio(15, 21, 16000000);   // Radio 1
 RF24 radio2(26, 25, 16000000);  // Radio 2
-RF24 radio3(17, 5, 16000000);   // Radio 3
+
 
 ### LED PIN (OPTIONAL)
-- `PIN 16 OF YOUR ESP32 `
+- `PIN 27 OF YOUR ESP32 `
 ---
 ## WIRING DIAGRAM
 
