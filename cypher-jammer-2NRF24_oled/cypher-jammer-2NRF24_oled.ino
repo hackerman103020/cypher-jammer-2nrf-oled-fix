@@ -27,13 +27,25 @@
 // NRF24
 #include "RF24.h"
 #include <SPI.h>
+#include <ezButton.h>
+#define Debounce_Time 25
+
+#define VSPI_SCK 14
+#define VSPI_MISO 13
+#define VSPI_MOSI 12
+
+#define VSPI2_SCK 18
+#define VSPI2_MISO 19
+#define VSPI2_MOSI 23
+
+
 
 // NrF24 Triple Module Pin Setup
 SPIClass vspi(VSPI);
 SPIClass hspi(HSPI);
 // radio(CE, CS)
-RF24 radio(26, 25, 16000000);   // Radio 1 (red bar on cypher esp32 flipper dev board) VSPI
-RF24 radio2(15, 21, 16000000);  // Radio 2 (green bar) HSPI
+RF24 radio(15, 21);   // Radio 1: CE=15, CS=21
+RF24 radio2(26, 25);  // Radio 2: CE=26, CS=25
 
 // OLED display settings
 #define SCREEN_WIDTH 128
@@ -47,9 +59,13 @@ U8G2_FOR_ADAFRUIT_GFX u8g2_for_adafruit_gfx;
 // LED
 #define LED_PIN 27
 // Buttons
-#define UP_BUTTON_PIN 34
-#define DOWN_BUTTON_PIN 39
-#define SELECT_BUTTON_PIN 36
+#define UP_BUTTON_PIN 22
+#define DOWN_BUTTON_PIN 32
+#define SELECT_BUTTON_PIN 33
+
+ezButton UP_BUTTON(UP_BUTTON_PIN);
+ezButton DOWN_BUTTON(DOWN_BUTTON_PIN);
+ezButton SELECT_BUTTON(SELECT_BUTTON_PIN);
 
 // STATE MANAGEMENT
 enum AppState {
@@ -115,8 +131,11 @@ void displayInfo(String title, String info1 = "", String info2 = "", String info
 
 void initRadios() {
   // Ensure proper SPI pin configuration for VSPI
-  vspi.begin();
-  hspi.begin();
+  // Configure first VSPI bus for radio1
+  vspi.begin(VSPI_SCK, VSPI_MISO, VSPI_MOSI);
+  
+  // Configure second VSPI bus for radio2
+  hspi.begin(VSPI2_SCK, VSPI2_MISO, VSPI2_MOSI);
   // Initialize each radio
   u8g2_for_adafruit_gfx.setCursor(0, 5);
   if (radio.begin(&vspi)) {
@@ -282,7 +301,7 @@ bool isButtonPressed(uint8_t pin) {
   if (digitalRead(pin) == LOW) {
     delay(100);  // Debounce delay
     if (digitalRead(pin) == LOW) {
-      digitalWrite(LED_PIN, HIGH);  // Turn on LED
+      //digitalWrite(LED_PIN, HIGH);  // Turn on LED
       return true;
     }
   }
@@ -292,7 +311,7 @@ void handleMenuSelection() {
   static bool buttonPressed = false;
 
   if (!buttonPressed) {
-    if (isButtonPressed(UP_BUTTON_PIN)) {
+    if (UP_BUTTON.isPressed()) {
       // Wrap around if at the top
       selectedMenuItem = static_cast<MenuItem>((selectedMenuItem == 0) ? (NUM_MENU_ITEMS - 1) : (selectedMenuItem - 1));
 
@@ -306,7 +325,7 @@ void handleMenuSelection() {
       Serial.println("UP button pressed");
       drawMenu();
       buttonPressed = true;
-    } else if (isButtonPressed(DOWN_BUTTON_PIN)) {
+    } else if (DOWN_BUTTON.isPressed()) {
       // Wrap around if at the bottom
       selectedMenuItem = static_cast<MenuItem>((selectedMenuItem + 1) % NUM_MENU_ITEMS);
 
@@ -320,17 +339,17 @@ void handleMenuSelection() {
       Serial.println("DOWN button pressed");
       drawMenu();
       buttonPressed = true;
-    } else if (isButtonPressed(SELECT_BUTTON_PIN)) {
+    } else if (SELECT_BUTTON.isPressed()) {
       Serial.println("SELECT button pressed");
       executeSelectedMenuItem();
       buttonPressed = true;
     }
   } else {
     // If no button is pressed, reset the buttonPressed flag
-    if (!isButtonPressed(UP_BUTTON_PIN) && !isButtonPressed(DOWN_BUTTON_PIN) && !isButtonPressed(SELECT_BUTTON_PIN)) {
+    //if (!DOWN_UP.isPressed() && !DOWN_BUTTON.isPressed() && !SELECT_BUTTON.isPressed()) {
       buttonPressed = false;
-      digitalWrite(LED_PIN, LOW);  // Turn off LED
-    }
+      //digitalWrite(LED_PIN, LOW);  // Turn off LED
+    //}
   }
 }
 
@@ -473,6 +492,9 @@ void setup() {
   pinMode(DOWN_BUTTON_PIN, INPUT_PULLUP);
   pinMode(SELECT_BUTTON_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
+  SELECT_BUTTON.setDebounceTime(Debounce_Time);
+  UP_BUTTON.setDebounceTime(Debounce_Time);
+  DOWN_BUTTON.setDebounceTime(Debounce_Time);
   Serial.println("buttons init'd");
 
   // Initialize U8g2_for_Adafruit_GFX
@@ -489,6 +511,9 @@ void setup() {
 }
 
 void loop() {
+    SELECT_BUTTON.loop();
+  UP_BUTTON.loop();
+  DOWN_BUTTON.loop();
   switch (currentState) {
     case STATE_MENU:
       handleMenuSelection();
