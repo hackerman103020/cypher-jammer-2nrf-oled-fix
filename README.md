@@ -47,12 +47,30 @@ This is an ESP32 wireless pentesting device that generates 2.4GHz signals at var
 ### FOR 3 NRF24s
 + Radio 1 ` VSPI= SCK = 14, MISO =13, MOSI = 12 ,CS =21 ,CE = 15`
 + Radio 2 ` VSPI= SCK = 18, MISO =19, MOSI = 23 ,CS =25 ,CE = 26`
++ use 3.3v
+
++ buttons ` Up = 22, Down = 32, Select = 33`(one side of button connecting to gnd, other to pin)
++ oled screen pin ` sda = 5, scl = 4`
+
++ https://github.com/T-vK/ESP32-BLE-Keyboard
+ you need this libary as its not in the Arduino IDE library. 
 
 
 ** edit code here to change radios **
 // radio(CE, CS)
 RF24 radio(15, 21, 16000000);   // Radio 1
 RF24 radio2(26, 25, 16000000);  // Radio 2
+(you will only need 7/8 pins connected)
+
+
+you will also need to downgrade your esp32 board version to 2.06 
+In Arduino IDE, go to Tools > Board > Boards Manager.
+
+Search for esp32.
+
+Click the version dropdown and install: 2.06
+
+
 
 
 ### LED PIN (OPTIONAL)
