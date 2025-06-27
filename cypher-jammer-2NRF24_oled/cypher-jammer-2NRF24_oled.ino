@@ -4,26 +4,16 @@
 #include "esp_wifi_types.h"
 #include "esp_system.h"
 #include "esp_event.h"
-#include "esp_event_loop.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
-#include "esp_event_loop.h"
 #include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>  // Change if using different library
+#include <Adafruit_SSD1306.h>
 #include <Adafruit_NeoPixel.h>
 #include <U8g2_for_Adafruit_GFX.h>
 // BT
 #include <BluetoothSerial.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
-#include <BleKeyboard.h>
-#include <BLEServer.h>
 // WIFI
 #include <WiFi.h>
-#include <DNSServer.h>
-#include <WebServer.h>
 // NRF24
 #include "RF24.h"
 #include <SPI.h>
@@ -33,12 +23,9 @@
 #define VSPI_SCK 14
 #define VSPI_MISO 13
 #define VSPI_MOSI 12
-
 #define VSPI2_SCK 18
 #define VSPI2_MISO 19
 #define VSPI2_MOSI 23
-
-
 
 // NrF24 Triple Module Pin Setup
 SPIClass vspi(VSPI);
@@ -73,12 +60,15 @@ enum AppState {
   STATE_BT_JAM,
   STATE_DRONE_JAM,
   STATE_WIFI_JAM,
+  STATE_WIFI_CHANNEL_SELECT,
   STATE_MULTI_JAM,
   STATE_TEST_NRF,
-
 };
 // Global variable to keep track of the current state
 AppState currentState = STATE_MENU;
+const int MIN_WIFI_CHANNEL = 1;
+const int MAX_WIFI_CHANNEL = 14;
+int selectedWiFiChannel = 1;
 
 // VARIABLES
 enum MenuItem {
@@ -101,22 +91,18 @@ MenuItem selectedMenuItem = BT_JAM;
 void nonBlockingDelay(unsigned long ms) {
   unsigned long start = millis();
   while (millis() - start < ms) {
-    // Allow ESP32 to handle background processes
-    yield();  // Very important!
+    yield();
   }
 }
+
 void displayInfo(String title, String info1 = "", String info2 = "", String info3 = "") {
   display.clearDisplay();
   drawBorder();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
-
-  // Title
   display.setCursor(4, 4);
   display.println(title);
   display.drawLine(0, 14, SCREEN_WIDTH, 14, SSD1306_WHITE);
-
-  // Info lines
   display.setCursor(4, 18);
   display.println(info1);
   display.setCursor(4, 28);
@@ -126,18 +112,11 @@ void displayInfo(String title, String info1 = "", String info2 = "", String info
   display.display();
 }
 
-
-//// ------- NRF24 SETUP ------------
-
+// ------- NRF24 SETUP ------------
 void initRadios() {
-  // Ensure proper SPI pin configuration for VSPI
-  // Configure first VSPI bus for radio1
   vspi.begin(VSPI_SCK, VSPI_MISO, VSPI_MOSI);
-  
-  // Configure second VSPI bus for radio2
   hspi.begin(VSPI2_SCK, VSPI2_MISO, VSPI2_MOSI);
-  // Initialize each radio
-  u8g2_for_adafruit_gfx.setCursor(0, 5);
+  
   if (radio.begin(&vspi)) {
     Serial.println("Radio 1 Started");
     radio.setAutoAck(false);
@@ -150,12 +129,12 @@ void initRadios() {
     radio.startConstCarrier(RF24_PA_MAX, 45);
     displayInfo("Radio 1 Test", "Passed", "Ready To Go!");
   } else {
-    Serial.printf("Radio 1 Failed to start");
+    Serial.println("Radio 1 Failed to start");
     displayInfo("Test Results", "FAILED", "Check Wiring!");
   }
   delay(3000);
+  
   if (radio2.begin(&hspi)) {
-    u8g2_for_adafruit_gfx.setCursor(0, 25);
     Serial.println("Radio 2 Started");
     radio2.setAutoAck(false);
     radio2.stopListening();
@@ -167,156 +146,122 @@ void initRadios() {
     radio2.startConstCarrier(RF24_PA_MAX, 45);
     displayInfo("Radio 2 Results", "Passed", "Ready To Go!");
   } else {
+    Serial.println("Radio 2 Failed to start");
     displayInfo("Radio 2 Results", "FAILED", "Check Wiring!");
   }
 }
 
-/* 
----
-Various options to use the 2.4ghz jammer to give you some ideas:
-Channels 1-14 are wifi, 40-80 are bluetooth, 1-125 drone (test on your own)
-one() - all radios on same random channel range
-singleChannel() - select individual channel range for each radio
-multipleChannels() - bounce between specific channels for focused tests
-channelRange() - provide a specific range to transmit, i.e. bluetooth 40-80, wifi 1-14, etc
-Test around & see what works best!
----
-*/
+// Stop jamming function
+void stopJamming() {
+  radio.stopConstCarrier();
+  radio2.stopConstCarrier();
+  Serial.println("Jamming stopped");
+}
+
 void btJam() {
-  ////RANDOM CHANNEL
   radio2.setChannel(random(81));
   radio.setChannel(random(81));
-  delayMicroseconds(random(60));  //////REMOVE IF SLOW
-  /*  YOU CAN DO -----SWEEP CHANNEL
-  for (int i = 0; i < 79; i++) {
-    radio.setChannel(i);
-*/
+  delayMicroseconds(random(60));
 }
 
 void droneJam() {
-  ////RANDOM CHANNEL
   radio2.setChannel(random(126));
   radio.setChannel(random(126));
-  delayMicroseconds(random(60));  //////REMOVE IF SLOW
-  /*  YOU CAN DO -----SWEEP CHANNEL
-  for (int i = 0; i < 79; i++) {
-    radio.setChannel(i);
-*/
+  delayMicroseconds(random(60));
 }
 
-void singleChannel() {
-  ////RANDOM CHANNEL
-  radio2.setChannel(random(81));
-  radio.setChannel(random(15));
-  delayMicroseconds(random(60));  //////REMOVE IF SLOW
-}
-void wifiJam() {
-  // Define the set of channels you want to choose from
-  int numbers[] = { 1, 6, 14 };
-  int sizeOfArray = sizeof(numbers) / sizeof(numbers[0]);  // Calculate the size of the array
-
-  // Generate a random index
-  int randomIndex = random(sizeOfArray);  // random(max) generates a number from 0 to max-1
-
-  // Select the random number from the array
-  int randomNumber = numbers[randomIndex];
-
-  radio.setChannel(randomNumber);
-  radio2.setChannel(randomNumber);
-
-  // Output the result to the Serial Monitor
-  Serial.print("Randomly selected channel: ");
-  Serial.println(randomNumber);
+// MODIFIED: Now takes channel parameter
+void wifiJam(int channel) {
+  radio.setChannel(channel);
+  radio2.setChannel(channel);
+  Serial.print("Jamming WiFi Channel: ");
+  Serial.println(channel);
 }
 
-void channelRange() {
-  int randomNumber = random(40, 81);  // 81 because the upper bound is exclusive
-
-  // Output the result to the Serial Monitor
-  Serial.print("Randomly selected number between 40 and 80: ");
-  Serial.println(randomNumber);
-
-  // Example usage with radio.setChannel
-  radio.setChannel(randomNumber);
-  radio2.setChannel(randomNumber);
-}
 // ------- NRF24 SETUP END ------------
 
 // ------- GENERAL CONFIGURATION ------------
-
 void initDisplay() {
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {  // Address 0x3C for 128x64
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
-    for (;;)
-      ;
+    for (;;);
   }
   display.display();
   delay(2000);
   display.clearDisplay();
 }
+
+void drawWiFiChannelSelect() {
+  display.clearDisplay();
+  drawBorder();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(4, 4);
+  display.println("Select WiFi Channel");
+  display.drawLine(0, 14, SCREEN_WIDTH, 14, SSD1306_WHITE);
+  display.setCursor(4, 30);
+  display.print("Channel: ");
+  display.print(selectedWiFiChannel);
+  display.setCursor(4, 50);
+  display.println("Press SELECT to start");
+  display.display();
+}
+
 void drawMenu() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
-  u8g2_for_adafruit_gfx.setFont(u8g2_font_baby_tf);  // Set back to small font
-
-
-  // Title bar
-  display.fillRect(0, 0, SCREEN_WIDTH, 16, SSD1306_WHITE);  // Top bar (16px)
-  display.setTextColor(SSD1306_BLACK);                      // Black text on white bar
-  display.setCursor(5, 4);                                  // Adjust as needed
+  u8g2_for_adafruit_gfx.setFont(u8g2_font_baby_tf);
+  display.fillRect(0, 0, SCREEN_WIDTH, 16, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(5, 4);
   display.setTextSize(1);
-  display.println("Home");  // Replace with dynamic title if needed
+  display.println("Home");
 
-  // Edit to add/remove menu items
   const char *menuLabels[NUM_MENU_ITEMS] = {
     "BT Jammer", "Drone Jammer", "Wifi Jammer", "Multi Ch Jam", "NRF Test"
   };
 
-  // Menu items below title bar
-  display.setTextColor(SSD1306_WHITE);  // White text in main menu area
-  for (int i = 0; i < 2; i++) {         // Show 2 menu items at a time
+  display.setTextColor(SSD1306_WHITE);
+  for (int i = 0; i < 2; i++) {
     int menuIndex = (firstVisibleMenuItem + i) % NUM_MENU_ITEMS;
     int16_t x = 5;
-    int16_t y = 20 + (i * 20);  // Adjust vertical spacing as needed
+    int16_t y = 20 + (i * 20);
 
-    // Highlight the selected item
     if (selectedMenuItem == menuIndex) {
       display.fillRect(0, y - 2, SCREEN_WIDTH, 15, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);  // Black text for highlighted item
+      display.setTextColor(SSD1306_BLACK);
     } else {
-      display.setTextColor(SSD1306_WHITE);  // White text for non-highlighted items
+      display.setTextColor(SSD1306_WHITE);
     }
     display.setCursor(x, y);
     display.setTextSize(1);
     display.println(menuLabels[menuIndex]);
   }
-
   display.display();
 }
 
 void drawBorder() {
   display.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, SSD1306_WHITE);
 }
+
 bool isButtonPressed(uint8_t pin) {
   if (digitalRead(pin) == LOW) {
-    delay(100);  // Debounce delay
+    delay(100);
     if (digitalRead(pin) == LOW) {
-      //digitalWrite(LED_PIN, HIGH);  // Turn on LED
       return true;
     }
   }
   return false;
 }
+
 void handleMenuSelection() {
   static bool buttonPressed = false;
 
   if (!buttonPressed) {
     if (UP_BUTTON.isPressed()) {
-      // Wrap around if at the top
       selectedMenuItem = static_cast<MenuItem>((selectedMenuItem == 0) ? (NUM_MENU_ITEMS - 1) : (selectedMenuItem - 1));
 
       if (selectedMenuItem == (NUM_MENU_ITEMS - 1)) {
-        // If wrapped to the bottom, make it visible
         firstVisibleMenuItem = NUM_MENU_ITEMS - 2;
       } else if (selectedMenuItem < firstVisibleMenuItem) {
         firstVisibleMenuItem = selectedMenuItem;
@@ -326,11 +271,9 @@ void handleMenuSelection() {
       drawMenu();
       buttonPressed = true;
     } else if (DOWN_BUTTON.isPressed()) {
-      // Wrap around if at the bottom
       selectedMenuItem = static_cast<MenuItem>((selectedMenuItem + 1) % NUM_MENU_ITEMS);
 
       if (selectedMenuItem == 0) {
-        // If wrapped to the top, make it visible
         firstVisibleMenuItem = 0;
       } else if (selectedMenuItem >= (firstVisibleMenuItem + 2)) {
         firstVisibleMenuItem = selectedMenuItem - 1;
@@ -345,60 +288,132 @@ void handleMenuSelection() {
       buttonPressed = true;
     }
   } else {
-    // If no button is pressed, reset the buttonPressed flag
-    //if (!DOWN_UP.isPressed() && !DOWN_BUTTON.isPressed() && !SELECT_BUTTON.isPressed()) {
-      buttonPressed = false;
-      //digitalWrite(LED_PIN, LOW);  // Turn off LED
-    //}
+    buttonPressed = false;
   }
 }
 
-static const unsigned char PROGMEM image_EviSmile1_bits[] = { 0x30, 0x03, 0x00, 0x60, 0x01, 0x80, 0xe0, 0x01, 0xc0, 0xf3, 0xf3, 0xc0, 0xff, 0xff, 0xc0, 0xff, 0xff, 0xc0, 0x7f, 0xff, 0x80, 0x7f, 0xff, 0x80, 0x7f, 0xff, 0x80, 0xef, 0xfd, 0xc0, 0xe7, 0xf9, 0xc0, 0xe3, 0xf1, 0xc0, 0xe1, 0xe1, 0xc0, 0xf1, 0xe3, 0xc0, 0xff, 0xff, 0xc0, 0x7f, 0xff, 0x80, 0x7b, 0xf7, 0x80, 0x3d, 0x2f, 0x00, 0x1e, 0x1e, 0x00, 0x0f, 0xfc, 0x00, 0x03, 0xf0, 0x00 };
-static const unsigned char PROGMEM image_Ble_connected_bits[] = { 0x07, 0xc0, 0x1f, 0xf0, 0x3e, 0xf8, 0x7e, 0x7c, 0x76, 0xbc, 0xfa, 0xde, 0xfc, 0xbe, 0xfe, 0x7e, 0xfc, 0xbe, 0xfa, 0xde, 0x76, 0xbc, 0x7e, 0x7c, 0x3e, 0xf8, 0x1f, 0xf0, 0x07, 0xc0 };
-static const unsigned char PROGMEM image_MHz_bits[] = { 0xc3, 0x61, 0x80, 0x00, 0xe7, 0x61, 0x80, 0x00, 0xff, 0x61, 0x80, 0x00, 0xff, 0x61, 0xbf, 0x80, 0xdb, 0x7f, 0xbf, 0x80, 0xdb, 0x7f, 0x83, 0x00, 0xdb, 0x61, 0x86, 0x00, 0xc3, 0x61, 0x8c, 0x00, 0xc3, 0x61, 0x98, 0x00, 0xc3, 0x61, 0xbf, 0x80, 0xc3, 0x61, 0xbf, 0x80 };
-static const unsigned char PROGMEM image_Error_bits[] = { 0x03, 0xf0, 0x00, 0x0f, 0xfc, 0x00, 0x1f, 0xfe, 0x00, 0x3f, 0xff, 0x00, 0x73, 0xf3, 0x80, 0x71, 0xe3, 0x80, 0xf8, 0xc7, 0xc0, 0xfc, 0x0f, 0xc0, 0xfe, 0x1f, 0xc0, 0xfe, 0x1f, 0xc0, 0xfc, 0x0f, 0xc0, 0xf8, 0xc7, 0xc0, 0x71, 0xe3, 0x80, 0x73, 0xf3, 0x80, 0x3f, 0xff, 0x00, 0x1f, 0xfe, 0x00, 0x0f, 0xfc, 0x00, 0x03, 0xf0, 0x00 };
-static const unsigned char PROGMEM image_Bluetooth_Idle_bits[] = { 0x20, 0xb0, 0x68, 0x30, 0x30, 0x68, 0xb0, 0x20 };
-static const unsigned char PROGMEM image_off_text_bits[] = { 0x67, 0x70, 0x94, 0x40, 0x96, 0x60, 0x94, 0x40, 0x64, 0x40 };
-static const unsigned char PROGMEM image_wifi_not_connected_bits[] = { 0x21, 0xf0, 0x00, 0x16, 0x0c, 0x00, 0x08, 0x03, 0x00, 0x25, 0xf0, 0x80, 0x42, 0x0c, 0x40, 0x89, 0x02, 0x20, 0x10, 0xa1, 0x00, 0x23, 0x58, 0x80, 0x04, 0x24, 0x00, 0x08, 0x52, 0x00, 0x01, 0xa8, 0x00, 0x02, 0x04, 0x00, 0x00, 0x42, 0x00, 0x00, 0xa1, 0x00, 0x00, 0x40, 0x80, 0x00, 0x00, 0x00 };
-static const unsigned char PROGMEM image_volume_muted_bits[] = { 0x01, 0xc0, 0x00, 0x02, 0x40, 0x00, 0x04, 0x40, 0x00, 0x08, 0x40, 0x00, 0xf0, 0x50, 0x40, 0x80, 0x48, 0x80, 0x80, 0x45, 0x00, 0x80, 0x42, 0x00, 0x80, 0x45, 0x00, 0x80, 0x48, 0x80, 0xf0, 0x50, 0x40, 0x08, 0x40, 0x00, 0x04, 0x40, 0x00, 0x02, 0x40, 0x00, 0x01, 0xc0, 0x00, 0x00, 0x00, 0x00 };
-static const unsigned char PROGMEM image_network_not_connected_bits[] = { 0x82, 0x0e, 0x44, 0x0a, 0x28, 0x0a, 0x10, 0x0a, 0x28, 0xea, 0x44, 0xaa, 0x82, 0xaa, 0x00, 0xaa, 0x0e, 0xaa, 0x0a, 0xaa, 0x0a, 0xaa, 0x0a, 0xaa, 0xea, 0xaa, 0xaa, 0xaa, 0xee, 0xee, 0x00, 0x00 };
-static const unsigned char PROGMEM image_microphone_muted_bits[] = { 0x87, 0x00, 0x4f, 0x80, 0x26, 0x80, 0x13, 0x80, 0x09, 0x80, 0x04, 0x80, 0x0a, 0x00, 0x0d, 0x00, 0x2e, 0xa0, 0x27, 0x40, 0x10, 0x20, 0x0f, 0x90, 0x02, 0x08, 0x02, 0x04, 0x0f, 0x82, 0x00, 0x00 };
-static const unsigned char PROGMEM image_mute_text_bits[] = { 0x8a, 0x5d, 0xe0, 0xda, 0x49, 0x00, 0xaa, 0x49, 0xc0, 0x8a, 0x49, 0x00, 0x89, 0x89, 0xe0 };
-static const unsigned char PROGMEM image_cross_contour_bits[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x80, 0x51, 0x40, 0x8a, 0x20, 0x44, 0x40, 0x20, 0x80, 0x11, 0x00, 0x20, 0x80, 0x44, 0x40, 0x8a, 0x20, 0x51, 0x40, 0x20, 0x80, 0x00, 0x00, 0x00, 0x00 };
+// Menu Functions
+void executeSelectedMenuItem() {
+  switch (selectedMenuItem) {
+    case BT_JAM:
+      currentState = STATE_BT_JAM;
+      Serial.println("BT JAM button pressed");
+      displayInfo("BT JAMMER", "ACTIVATING RADIOS", "Starting....");
+      initRadios();
+      nonBlockingDelay(2000);
+      displayInfo("BT JAMMER", "RADIOS ACTIVE", "Running....");
+      while (!isButtonPressed(SELECT_BUTTON_PIN)) {
+        btJam();
+      }
+      stopJamming(); // Stop jamming when exiting
+      break;
+      
+    case WIFI_JAM:
+      currentState = STATE_WIFI_CHANNEL_SELECT;
+      selectedWiFiChannel = 1;
+      drawWiFiChannelSelect();
+      break;
+      
+    case DRONE_JAM:
+      currentState = STATE_DRONE_JAM;
+      Serial.println("DRONE JAM button pressed");
+      displayInfo("DRONE JAMMER", "ACTIVATING RADIOS", "Starting....");
+      initRadios();
+      nonBlockingDelay(2000);
+      displayInfo("DRONE JAMMER", "RADIOS ACTIVE", "Running....");
+      while (!isButtonPressed(SELECT_BUTTON_PIN)) {
+        droneJam();
+      }
+      stopJamming(); // Stop jamming when exiting
+      break;
+      
+    case MULTI_JAM:
+      currentState = STATE_MULTI_JAM;
+      Serial.println("MULTI CH JAM button pressed");
+      displayInfo("MULTI CH JAMMER", "ACTIVATING RADIOS", "Starting....");
+      initRadios();
+      nonBlockingDelay(2000);
+      displayInfo("MULTI CH JAMMER", "RADIOS ACTIVE", "Running....");
+      while (!isButtonPressed(SELECT_BUTTON_PIN)) {
+        droneJam();
+      }
+      stopJamming(); // Stop jamming when exiting
+      break;
+      
+    case TEST_NRF:
+      currentState = STATE_TEST_NRF;
+      Serial.println("TEST_NRF button pressed");
+      initRadios();
+      nonBlockingDelay(2000);
+      while (!isButtonPressed(SELECT_BUTTON_PIN)) {
+        // Just wait, no jamming
+      }
+      stopJamming(); // Stop jamming when exiting
+      break;
+  }
+}
 
-void demonSHIT() {
-  display.clearDisplay();
-  u8g2_for_adafruit_gfx.setFont(u8g2_font_adventurer_tr);  // Use a larger font for the title
-  u8g2_for_adafruit_gfx.setCursor(20, 40);                 // Centered vertically
-  display.drawBitmap(56, 40, image_EviSmile1_bits, 18, 21, 1);
-  display.setTextWrap(false);
-  u8g2_for_adafruit_gfx.setCursor(30, 18);
-  //u8g2_for_adafruit_gfx.print("D E M O N");
-  u8g2_for_adafruit_gfx.print("2.4 G H Z");
-  u8g2_for_adafruit_gfx.setCursor(40, 35);
-  u8g2_for_adafruit_gfx.print("J A M R");
-  display.drawBitmap(106, 19, image_Ble_connected_bits, 15, 15, 1);
-  display.drawBitmap(2, 50, image_MHz_bits, 25, 11, 1);
-  display.drawBitmap(1, 1, image_Error_bits, 18, 18, 1);
-  display.drawBitmap(25, 38, image_Bluetooth_Idle_bits, 5, 8, 1);
-  display.drawBitmap(83, 55, image_off_text_bits, 12, 5, 1);
-  display.drawBitmap(109, 2, image_wifi_not_connected_bits, 19, 16, 1);
-  display.drawBitmap(4, 31, image_volume_muted_bits, 18, 16, 1);
-  display.drawBitmap(109, 45, image_network_not_connected_bits, 15, 16, 1);
-  display.drawBitmap(92, 33, image_microphone_muted_bits, 15, 16, 1);
-  display.drawBitmap(1, 23, image_mute_text_bits, 19, 5, 1);
-  display.drawBitmap(32, 49, image_cross_contour_bits, 11, 16, 1);
-  display.display();
+void handleWiFiChannelSelect() {
+  static bool buttonPressed = false;
+
+  if (!buttonPressed) {
+    if (UP_BUTTON.isPressed()) {
+      selectedWiFiChannel = (selectedWiFiChannel == MAX_WIFI_CHANNEL) ? MIN_WIFI_CHANNEL : selectedWiFiChannel + 1;
+      Serial.print("Channel up: ");
+      Serial.println(selectedWiFiChannel);
+      drawWiFiChannelSelect();
+      buttonPressed = true;
+    } else if (DOWN_BUTTON.isPressed()) {
+      selectedWiFiChannel = (selectedWiFiChannel == MIN_WIFI_CHANNEL) ? MAX_WIFI_CHANNEL : selectedWiFiChannel - 1;
+      Serial.print("Channel down: ");
+      Serial.println(selectedWiFiChannel);
+      drawWiFiChannelSelect();
+      buttonPressed = true;
+    } else if (SELECT_BUTTON.isPressed()) {
+      Serial.println("Starting WiFi jamming");
+      currentState = STATE_WIFI_JAM;
+      initRadios();
+      displayInfo("WiFi Jammer", "Jamming Channel", String(selectedWiFiChannel).c_str());
+      buttonPressed = true;
+    }
+  } else {
+    buttonPressed = false;
+  }
 }
-void displayTitleScreen() {
-  display.clearDisplay();
-  u8g2_for_adafruit_gfx.setFont(u8g2_font_adventurer_tr);  // Use a larger font for the title
-  u8g2_for_adafruit_gfx.setCursor(20, 40);                 // Centered vertically
-  u8g2_for_adafruit_gfx.print("CYPHER BOX");
-  // u8g2_for_adafruit_gfx.setCursor(centerX, 25); // Centered vertically
-  // u8g2_for_adafruit_gfx.print("NETWORK PET");
-  display.display();
+
+// ------- GENERAL CONFIGURATION END ------------
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+  Wire.begin(5, 4);
+  Wire.setClock(100000);
+  delay(3000);
+  initDisplay();
+  
+  // Disable unnecessary wireless interfaces
+  //esp_bt_controller_deinit();
+  esp_wifi_stop();
+  esp_wifi_deinit();
+
+  pinMode(UP_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(DOWN_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(SELECT_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LED_PIN, OUTPUT);
+  
+  SELECT_BUTTON.setDebounceTime(Debounce_Time);
+  UP_BUTTON.setDebounceTime(Debounce_Time);
+  DOWN_BUTTON.setDebounceTime(Debounce_Time);
+  Serial.println("buttons init'd");
+
+  // Initialize U8g2_for_Adafruit_GFX
+  u8g2_for_adafruit_gfx.begin(display);
+  
+  // Display splash screens
+  displayInfoScreen();
+  delay(3000);
+  drawMenu();
 }
+
 void displayInfoScreen() {
   display.clearDisplay();
   u8g2_for_adafruit_gfx.setFont(u8g2_font_baby_tf);  // Set back to small font
@@ -417,146 +432,62 @@ void displayInfoScreen() {
   display.display();
 }
 
-// Menu Functions
-void executeSelectedMenuItem() {
-  switch (selectedMenuItem) {
-
-    case BT_JAM:
-      currentState = STATE_BT_JAM;
-      Serial.println("BT JAM button pressed");
-      displayInfo("BT JAMMER", "ACTIVATING RADIOS", "Starting....");
-      initRadios();
-      nonBlockingDelay(2000);  // Debounce nonBlockingDelay
-      displayInfo("BT JAMMER", "RADIOS ACTIVE", "Running....");
-      while (!isButtonPressed(SELECT_BUTTON_PIN)) {
-        btJam();
-      }
-      break;
-
-    case WIFI_JAM:
-      currentState = STATE_WIFI_JAM;
-      Serial.println("WIFI JAM button pressed");
-      displayInfo("WIFI JAMMER", "ACTIVATING RADIOS", "Starting....");
-      initRadios();
-      nonBlockingDelay(2000);  // Debounce nonBlockingDelay
-      displayInfo("WIFI JAMMER", "RADIOS ACTIVE", "Running....");
-      while (!isButtonPressed(SELECT_BUTTON_PIN)) {
-        wifiJam();
-      }
-      break;
-    case DRONE_JAM:
-      currentState = STATE_DRONE_JAM;
-      Serial.println("DRONE JAM button pressed");
-      displayInfo("DRONE JAMMER", "ACTIVATING RADIOS", "Starting....");
-      initRadios();
-      nonBlockingDelay(2000);  // Debounce nonBlockingDelay
-      displayInfo("DRONE JAMMER", "RADIOS ACTIVE", "Running....");
-      while (!isButtonPressed(SELECT_BUTTON_PIN)) {
-        droneJam();
-      }
-      break;
-    case MULTI_JAM:
-      currentState = STATE_MULTI_JAM;
-      Serial.println("DRONE JAM button pressed");
-      displayInfo("MULTI CH JAMMER", "ACTIVATING RADIOS", "Starting....");
-      initRadios();
-      nonBlockingDelay(2000);  // Debounce nonBlockingDelay
-      displayInfo("MULTI CH JAMMER", "RADIOS ACTIVE", "Running....");
-      while (!isButtonPressed(SELECT_BUTTON_PIN)) {
-        droneJam();
-      }
-      break;
-    case TEST_NRF:
-      currentState = STATE_TEST_NRF;
-      Serial.println("TEST_NRF button pressed");
-      initRadios();
-      nonBlockingDelay(2000);  // Debounce nonBlockingDelay
-      break;
-  }
-}
-
-// ------- GENERAL CONFIGURATION END ------------
-void setup() {
-  Serial.begin(115200);
-  delay(2000);
-  Wire.begin(5, 4);
-  Wire.setClock(100000);
-  delay(3000);
-  initDisplay();
-  // Disable unnecessary wireless interfaces
-  esp_bt_controller_deinit();
-  esp_wifi_stop();
-  esp_wifi_deinit();
-
-  pinMode(UP_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(DOWN_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(SELECT_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(LED_PIN, OUTPUT);
-  SELECT_BUTTON.setDebounceTime(Debounce_Time);
-  UP_BUTTON.setDebounceTime(Debounce_Time);
-  DOWN_BUTTON.setDebounceTime(Debounce_Time);
-  Serial.println("buttons init'd");
-
-  // Initialize U8g2_for_Adafruit_GFX
-  u8g2_for_adafruit_gfx.begin(display);
-  // Display splash screens
-  demonSHIT();
-  delay(5000);  // Show title screen for 3 seconds
-                //displayInfoScreen();
-                //delay(5000);  // Show info screen for 5 seconds
-  // Initial display
-  displayInfoScreen();
-  delay(3000);
-  drawMenu();
-}
-
 void loop() {
-    SELECT_BUTTON.loop();
+  SELECT_BUTTON.loop();
   UP_BUTTON.loop();
   DOWN_BUTTON.loop();
+  
   switch (currentState) {
     case STATE_MENU:
       handleMenuSelection();
       break;
+      
     case STATE_BT_JAM:
       if (isButtonPressed(SELECT_BUTTON_PIN)) {
         currentState = STATE_MENU;
         drawMenu();
-        nonBlockingDelay(500);  // Debounce nonBlockingDelay
-        return;
+        nonBlockingDelay(500);
       }
       break;
+      
     case STATE_WIFI_JAM:
+      // Continuously jam the selected WiFi channel
+      wifiJam(selectedWiFiChannel);
+      
       if (isButtonPressed(SELECT_BUTTON_PIN)) {
+        stopJamming();
         currentState = STATE_MENU;
         drawMenu();
-        nonBlockingDelay(500);  // Debounce nonBlockingDelay
-        return;
+        nonBlockingDelay(500);
       }
       break;
+      
     case STATE_DRONE_JAM:
       if (isButtonPressed(SELECT_BUTTON_PIN)) {
         currentState = STATE_MENU;
         drawMenu();
-        nonBlockingDelay(500);  // Debounce nonBlockingDelay
-        return;
+        nonBlockingDelay(500);
       }
       break;
+      
     case STATE_MULTI_JAM:
       if (isButtonPressed(SELECT_BUTTON_PIN)) {
         currentState = STATE_MENU;
         drawMenu();
-        nonBlockingDelay(500);  // Debounce nonBlockingDelay
-        return;
+        nonBlockingDelay(500);
       }
       break;
+      
     case STATE_TEST_NRF:
       if (isButtonPressed(SELECT_BUTTON_PIN)) {
         currentState = STATE_MENU;
         drawMenu();
-        nonBlockingDelay(500);  // Debounce nonBlockingDelay
-        return;
+        nonBlockingDelay(500);
       }
+      break;
+      
+    case STATE_WIFI_CHANNEL_SELECT:
+      handleWiFiChannelSelect();
       break;
   }
 }
