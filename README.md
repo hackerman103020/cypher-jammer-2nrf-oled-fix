@@ -21,6 +21,8 @@ This is an ESP32 wireless pentesting device that generates 2.4GHz signals at var
 
 **IT CREATES NOISE SIGNAL TO JAM BLUETOOTH, DRONES, AND WIFI USING NRF24L01 AND ESP32 IN RANGE 2.4GHZ DEVICES , EFFECTS MAY VARY DEPENDS ON DEVICE BLUETOOTH VERSIONS **
 
+I only fixed the wifi jam, other features may not work 
+
 ---
 
 ---
